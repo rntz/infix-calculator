@@ -39,7 +39,7 @@ instance Monoid ParseEnv where
 type Parse a = Parsec String () a
 
 program :: ParseEnv -> Parse [Decl]
-program env = whiteSpace >> decls env
+program env = whiteSpace >> decls env <* eof
 
 decls :: ParseEnv -> Parse [Decl]
 decls env = decls' [] env
@@ -57,28 +57,19 @@ decls' accum env = option (reverse accum) $ do
 --        | "infix" prec op
 --        | "infixl" prec op
 --        | "infixr" prec op
-decl :: ParseEnv -> Parse (Either ParseEnv Decl)
-decl env = (Left <$> declInfix)
-           <|> (Right <$> choice [ declPrint, declLet, declDef ])
+decl env = choice [reserved x >> y | (x,y) <- table]
     where
       exp = expr env
-      declPrint = do reserved "print"; Print <$> exp
-      declLet = do reserved "let"
-                   Let <$> identifier <*> (equals >> exp)
-      declDef = do
-        reserved "def"
-        x <- identifier
-        choice [ do args <- parens (commaSep identifier)
-                    Def x args <$> (equals >> exp)
-               , do opName <- operator
-                    y <- identifier
-                    Def opName [x,y] <$> (equals >> exp) ]
-      declInfix = munge <$> infixity <*> natural <*> operator
-      munge assoc prec name =
-          ParseEnv $ Map.singleton name (fromInteger prec, assoc)
-      infixity = choice [ AssocLeft <$ reserved "infixl"
-                        , AssocRight <$ reserved "infixr"
-                        , AssocNone <$ reserved "infix" ]
+      table = [ ("print", Right . Print <$> exp)
+              , ("let", Right <$> (Let <$> identifier <*> (equals >> exp)))
+              , ("def", Right <$> ((pDef =<< identifier) <*> (equals >> exp)))
+              , ("infixl", pInfix AssocLeft)
+              , ("infixr", pInfix AssocRight)
+              , ("infix", pInfix AssocNone) ]
+      pDef x = choice [ Def x <$> parens (commaSep identifier)
+                      , Def <$> operator <*> ((\y-> [x,y]) <$> identifier) ]
+      pInfix assoc = Left <$> (munge <$> (fromInteger <$> natural) <*> operator)
+          where munge prec name = parseEnvFromList [(name, prec, assoc)]
 
 assoc = choice [ AssocLeft <$ reserved "L"
                , AssocRight <$ reserved "R"
